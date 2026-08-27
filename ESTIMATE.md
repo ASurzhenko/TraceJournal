@@ -1,8 +1,8 @@
 # Trace Journal — Initial Effort Estimate
 
-**Prepared:** 2026-08-26, before product or server implementation  
-**Target completion:** 2026-08-27  
-**Expected effort:** **12 focused hours** (about **1.5 eight-hour working days**)  
+**Prepared:** 2026-08-26, before product or server implementation
+**Target completion:** 2026-08-27
+**Expected effort:** **12 focused hours** (about **1.5 eight-hour working days**)
 **Working range:** **9–18 focused hours**
 
 The Unity project scaffold, Android baseline settings, repository setup and initial
