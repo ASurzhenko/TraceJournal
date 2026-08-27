@@ -29,6 +29,29 @@ in a remote database.
 | Provide restricted remote-server access | Separate project invitation/handoff | Prepared separately |
 | Document effort, architecture, process and challenges | This README, `DECISIONS.md`, `ESTIMATE.md` | Complete |
 
+## Visual evidence
+
+| Local journal | Database prompt A | Database prompt B |
+|---|---|---|
+| <img src="Documentation/Screenshots/01-journal-list.jpg" width="260" alt="Two locally persisted and remotely synced journal records"> | <img src="Documentation/Screenshots/02-prompt-a.jpg" width="260" alt="Composer using the first database-selected input placeholder"> | <img src="Documentation/Screenshots/03-prompt-b.jpg" width="260" alt="Composer after the database-selected input placeholder changed"> |
+
+The two composer captures show `app_config.active_prompt_id` changing the input
+placeholder without a client update. The journal list shows matching short record IDs
+for quick inspection of the deterministic remote paths.
+
+**Private image storage** — the `journal-images` bucket stores each JPEG under
+`{user UUID}/{record UUID}.jpg`:
+
+![Private Supabase Storage with deterministic journal image paths](Documentation/Screenshots/04-remote-evidence.jpg)
+
+**Single-table CSV export** — two synthetic records with UTC timestamps and compact
+image/prompt metadata:
+
+![CSV export opened as a single table](Documentation/Screenshots/05-csv-export.jpg)
+
+The underlying synthetic export is included as
+[`Documentation/Exports/journal_records_csv_rows.csv`](Documentation/Exports/journal_records_csv_rows.csv).
+
 ## Architecture
 
 - `JournalRecord` is the versioned local/remote contract. Stable UUIDs are reused
@@ -119,6 +142,8 @@ curl "$SUPABASE_URL/rest/v1/journal_records_csv?select=record_id,created_utc,upl
   the deployment owner adds CAPTCHA outside this compact challenge flow.
 - Sync is one attempt after local save/startup plus explicit `Failed · Retry`; there is
   no background worker, backoff engine, concurrency proof or orphan cleanup worker.
+- `Synced` records reflect the last successful delivery acknowledgement. The client
+  does not reconcile later out-of-band row deletion performed by an administrator.
 - A Storage upload can succeed before its database upsert fails. Retry safely overwrites
   the same deterministic object path and upserts the same UUID row.
 
@@ -127,7 +152,7 @@ curl "$SUPABASE_URL/rest/v1/journal_records_csv?select=record_id,created_utc,upl
 The APK is delivered separately because build artifacts are intentionally gitignored:
 
 - `TraceJournal.apk`, version `1.0.0` (`versionCode` 1)
-- SHA-256: `C42AB9BBB710D0262C22FC42831A52FC15DD3CE93BDBEFDD66A4D9403C6F6478`
+- SHA-256: `FDD6879970616A19EC4F1FB00698DF850B93C9FF7E5C53DDFF53A71FF4045E4C`
 - API 28 minimum, API 36 target, IL2CPP `arm64-v8a` + `armeabi-v7a`
 
 Restricted Supabase dashboard access is granted by project invitation through a
