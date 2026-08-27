@@ -142,3 +142,16 @@ changing it. Proposals are not implementation instructions until accepted.
 - **Cost:** The hosted project must remain available for the review window and its
   invitations must be managed separately from GitHub.
 - **Revisit if:** The evaluator specifies a different access mechanism.
+
+### D-015 — Transparent image normalization
+
+- **Choice:** Continue normalizing app-owned images to bounded JPEG, explicitly
+  compositing transparent and semi-transparent source pixels onto white first.
+- **Why:** JPEG keeps the existing local/remote contract compact and predictable,
+  while an intentional neutral background prevents transparent PNG pixels from
+  becoming accidental black areas during encoding.
+- **Cost:** Transparency is intentionally discarded and cannot be recovered from
+  the stored image.
+- **Revisit if:** Preserving alpha becomes a product requirement; that would require
+  PNG/WebP storage plus matching path and Content-Type changes across local and
+  remote persistence.

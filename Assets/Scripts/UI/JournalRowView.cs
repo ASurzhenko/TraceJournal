@@ -78,6 +78,7 @@ namespace TraceJournal.UI
             ReleaseThumbnail();
             _thumbnailTexture = thumbnailTexture;
             thumbnail.texture = _thumbnailTexture;
+            FitThumbnailToFrame(_thumbnailTexture);
             SetThumbnailAlpha(0f);
             loadingSpinner.SetActive(false);
 
@@ -96,6 +97,7 @@ namespace TraceJournal.UI
             if (thumbnail != null && thumbnail.texture == _thumbnailTexture)
             {
                 thumbnail.texture = null;
+                thumbnail.uvRect = new Rect(0f, 0f, 1f, 1f);
             }
 
             if (_thumbnailTexture != null)
@@ -103,6 +105,43 @@ namespace TraceJournal.UI
                 Destroy(_thumbnailTexture);
                 _thumbnailTexture = null;
             }
+        }
+
+        private void FitThumbnailToFrame(Texture2D texture)
+        {
+            if (texture == null || texture.width <= 0 || texture.height <= 0)
+            {
+                thumbnail.uvRect = new Rect(0f, 0f, 1f, 1f);
+                return;
+            }
+
+            Rect frameRect = thumbnail.rectTransform.rect;
+            if (frameRect.width <= 0f || frameRect.height <= 0f)
+            {
+                thumbnail.uvRect = new Rect(0f, 0f, 1f, 1f);
+                return;
+            }
+
+            float textureAspect = (float)texture.width / texture.height;
+            float frameAspect = frameRect.width / frameRect.height;
+
+            if (textureAspect > frameAspect)
+            {
+                float visibleWidth = frameAspect / textureAspect;
+                thumbnail.uvRect = new Rect(
+                    (1f - visibleWidth) * 0.5f,
+                    0f,
+                    visibleWidth,
+                    1f);
+                return;
+            }
+
+            float visibleHeight = textureAspect / frameAspect;
+            thumbnail.uvRect = new Rect(
+                0f,
+                (1f - visibleHeight) * 0.5f,
+                1f,
+                visibleHeight);
         }
 
         private void OnDestroy()

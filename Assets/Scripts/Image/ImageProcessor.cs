@@ -71,6 +71,7 @@ namespace TraceJournal.Image
                     encodeSource = scaledTex;
                 }
 
+                FlattenTransparencyOntoWhite(encodeSource);
                 byte[] jpegBytes = encodeSource.EncodeToJPG(JpegQuality);
                 if (jpegBytes == null || jpegBytes.Length == 0)
                 {
@@ -133,6 +134,38 @@ namespace TraceJournal.Image
             int newW = Mathf.Max(1, Mathf.RoundToInt(w * scale));
             int newH = Mathf.Max(1, Mathf.RoundToInt(h * scale));
             return (newW, newH);
+        }
+
+        private static void FlattenTransparencyOntoWhite(Texture2D texture)
+        {
+            Color32[] pixels = texture.GetPixels32();
+            bool hasTransparency = false;
+
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color32 pixel = pixels[i];
+                if (pixel.a == byte.MaxValue)
+                {
+                    continue;
+                }
+
+                int alpha = pixel.a;
+                int inverseAlpha = byte.MaxValue - alpha;
+                pixel.r = (byte)((pixel.r * alpha + byte.MaxValue * inverseAlpha + 127) / byte.MaxValue);
+                pixel.g = (byte)((pixel.g * alpha + byte.MaxValue * inverseAlpha + 127) / byte.MaxValue);
+                pixel.b = (byte)((pixel.b * alpha + byte.MaxValue * inverseAlpha + 127) / byte.MaxValue);
+                pixel.a = byte.MaxValue;
+                pixels[i] = pixel;
+                hasTransparency = true;
+            }
+
+            if (!hasTransparency)
+            {
+                return;
+            }
+
+            texture.SetPixels32(pixels);
+            texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
         }
 
         private static Texture2D ScaleTexture(Texture2D source, int targetW, int targetH)
