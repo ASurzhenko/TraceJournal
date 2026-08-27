@@ -138,15 +138,92 @@ namespace TraceJournal.Data
                 return false;
             }
 
+            if (!TryWriteJson(json, out error))
+            {
+                CleanupImage(newlyCreatedImageAbsolutePath);
+                return false;
+            }
+
+            return true;
+        }
+
+        public bool TryGet(string recordId, out JournalRecord record, out string error)
+        {
+            record = null;
+            if (!TryLoad(out List<JournalRecord> records, out error))
+            {
+                return false;
+            }
+
+            record = records.Find(item => string.Equals(item.id, recordId, StringComparison.Ordinal));
+            if (record == null)
+            {
+                error = $"Journal record {recordId} was not found.";
+                Debug.LogWarning(
+                    $"{nameof(JournalRepository)}.{nameof(TryGet)} [Record] id={recordId}, count={records.Count}");
+                return false;
+            }
+
+            return true;
+        }
+
+        public bool TryUpdateRemoteState(
+            string recordId,
+            SyncState syncState,
+            string remoteId,
+            string syncError,
+            out string error)
+        {
+            if (!TryLoad(out List<JournalRecord> records, out error))
+            {
+                return false;
+            }
+
+            JournalRecord record = records.Find(
+                item => string.Equals(item.id, recordId, StringComparison.Ordinal));
+            if (record == null)
+            {
+                error = $"Journal record {recordId} was not found.";
+                Debug.LogWarning(
+                    $"{nameof(JournalRepository)}.{nameof(TryUpdateRemoteState)} [Record] id={recordId}, count={records.Count}");
+                return false;
+            }
+
+            record.syncState = syncState;
+            record.remoteId = remoteId ?? string.Empty;
+            record.syncError = syncError ?? string.Empty;
+
+            var collection = new JournalCollection
+            {
+                schemaVersion = JournalCollection.CurrentSchemaVersion,
+                records = records
+            };
+
+            return TryWriteCollection(collection, out error);
+        }
+
+        private bool TryWriteCollection(JournalCollection collection, out string error)
+        {
+            try
+            {
+                string json = JsonUtility.ToJson(collection, prettyPrint: false);
+                return TryWriteJson(json, out error);
+            }
+            catch (Exception ex)
+            {
+                error = $"Serialization failed: {ex.Message}";
+                return false;
+            }
+        }
+
+        private bool TryWriteJson(string json, out string error)
+        {
             string tempPath = _indexPath + ".tmp";
 
             try
             {
                 File.WriteAllText(tempPath, json);
 
-                // Replace only after the temp write is on disk. File.Replace is
-                // atomic on the same volume; fall back to delete+move if the
-                // original index doesn't exist yet.
                 if (File.Exists(_indexPath))
                 {
                     File.Replace(tempPath, _indexPath, null);
@@ -155,16 +232,16 @@ namespace TraceJournal.Data
                 {
                     File.Move(tempPath, _indexPath);
                 }
+
+                error = null;
+                return true;
             }
             catch (Exception ex)
             {
                 error = $"Index write failed: {ex.Message}";
                 TryDeleteFile(tempPath);
-                CleanupImage(newlyCreatedImageAbsolutePath);
                 return false;
             }
-
-            return true;
         }
 
         private bool ValidateNewRecordImage(

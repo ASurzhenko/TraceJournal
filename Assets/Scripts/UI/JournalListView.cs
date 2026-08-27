@@ -1,3 +1,5 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,11 +17,16 @@ namespace TraceJournal.UI
         [SerializeField] private GameObject emptyStateRoot;
 
         private readonly List<JournalRowView> _spawnedRows = new List<JournalRowView>();
+        private int _renderGeneration;
 
         /// Renders the full list newest-first. imagesDir is used to resolve each
         /// record's relative image path to load a thumbnail texture.
-        public void Render(List<JournalRecord> records, string imagesDir)
+        public void Render(
+            List<JournalRecord> records,
+            string imagesDir,
+            Action<string> onRetry)
         {
+            int thisGeneration = ++_renderGeneration;
             ClearRows();
 
             List<JournalRecord> ordered = records
@@ -33,11 +40,41 @@ namespace TraceJournal.UI
 
             foreach (JournalRecord record in ordered)
             {
-                Texture2D thumb = LoadThumbnail(record, imagesDir);
                 JournalRowView row = Instantiate(rowPrefab, contentRoot);
-                row.Bind(record, thumb);
+                row.Bind(record, onRetry);
                 _spawnedRows.Add(row);
+                StartCoroutine(LoadThumbnailNextFrame(
+                    row,
+                    record,
+                    imagesDir,
+                    thisGeneration));
             }
+        }
+
+        private IEnumerator LoadThumbnailNextFrame(
+            JournalRowView row,
+            JournalRecord record,
+            string imagesDir,
+            int renderGeneration)
+        {
+            yield return null;
+            if (renderGeneration != _renderGeneration || row == null)
+            {
+                yield break;
+            }
+
+            Texture2D thumbnail = LoadThumbnail(record, imagesDir);
+            if (renderGeneration != _renderGeneration || row == null)
+            {
+                if (thumbnail != null)
+                {
+                    Destroy(thumbnail);
+                }
+
+                yield break;
+            }
+
+            row.SetThumbnail(thumbnail);
         }
 
         private void ClearRows()
@@ -56,6 +93,7 @@ namespace TraceJournal.UI
 
         private void OnDestroy()
         {
+            _renderGeneration++;
             ClearRows();
         }
 
@@ -72,11 +110,20 @@ namespace TraceJournal.UI
                 return null;
             }
 
-            return NativeGallery.LoadImageAtPath(
-                absolute,
-                ThumbnailMaxLongEdge,
-                markTextureNonReadable: true,
-                generateMipmaps: false);
+            try
+            {
+                return NativeGallery.LoadImageAtPath(
+                    absolute,
+                    ThumbnailMaxLongEdge,
+                    markTextureNonReadable: true,
+                    generateMipmaps: false);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"{nameof(JournalListView)}.{nameof(LoadThumbnail)} [Thumbnail] id={record.id}, error={ex.Message}");
+                return null;
+            }
         }
     }
 }

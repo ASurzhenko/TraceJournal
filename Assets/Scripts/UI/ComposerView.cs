@@ -1,3 +1,4 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -6,18 +7,25 @@ namespace TraceJournal.UI
 {
     public class ComposerView : MonoBehaviour
     {
+        private static readonly float PreviewFadeDurationSeconds = 0.5f;
+
         [SerializeField] private GameObject panelRoot;
         [SerializeField] private TMP_InputField textInput;
         [SerializeField] private RawImage previewImage;
+        [SerializeField] private GameObject loadingSpinner;
         [SerializeField] private GameObject previewPlaceholder;
         [SerializeField] private Button chooseImageButton;
         [SerializeField] private Button saveButton;
         [SerializeField] private Button cancelButton;
+        [SerializeField] private Button closeButton;
         [SerializeField] private TMP_Text errorText;
+
+        private Coroutine _previewFadeCoroutine;
 
         public Button ChooseImageButton => chooseImageButton;
         public Button SaveButton => saveButton;
         public Button CancelButton => cancelButton;
+        public Button CloseButton => closeButton;
 
         public string CurrentText => textInput != null ? textInput.text : string.Empty;
 
@@ -43,9 +51,34 @@ namespace TraceJournal.UI
         {
             if (previewImage == null) return;
 
+            StopPreviewFade();
+            loadingSpinner.SetActive(false);
             previewImage.texture = texture;
             previewImage.gameObject.SetActive(texture != null);
             if (previewPlaceholder != null) previewPlaceholder.SetActive(texture == null);
+
+            SetPreviewAlpha(0f);
+            if (texture != null)
+            {
+                _previewFadeCoroutine = StartCoroutine(FadePreviewIn());
+            }
+        }
+
+        public void BeginPreviewLoading()
+        {
+            StopPreviewFade();
+            SetPreviewAlpha(0f);
+            loadingSpinner.SetActive(true);
+            if (previewPlaceholder != null) previewPlaceholder.SetActive(false);
+        }
+
+        public void EndPreviewLoading()
+        {
+            loadingSpinner.SetActive(false);
+            bool hasPreview = previewImage.texture != null;
+            previewImage.gameObject.SetActive(hasPreview);
+            SetPreviewAlpha(hasPreview ? 1f : 0f);
+            if (previewPlaceholder != null) previewPlaceholder.SetActive(!hasPreview);
         }
 
         public void SetError(string message)
@@ -54,6 +87,51 @@ namespace TraceJournal.UI
             bool has = !string.IsNullOrEmpty(message);
             errorText.gameObject.SetActive(has);
             errorText.text = has ? message : string.Empty;
+        }
+
+        public void SetPrompt(string value)
+        {
+            if (textInput.placeholder is TMP_Text placeholder)
+            {
+                placeholder.text = value;
+            }
+        }
+
+        private IEnumerator FadePreviewIn()
+        {
+            float elapsed = 0f;
+            while (elapsed < PreviewFadeDurationSeconds)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                SetPreviewAlpha(Mathf.Clamp01(elapsed / PreviewFadeDurationSeconds));
+                yield return null;
+            }
+
+            SetPreviewAlpha(1f);
+            _previewFadeCoroutine = null;
+        }
+
+        private void SetPreviewAlpha(float alpha)
+        {
+            Color color = previewImage.color;
+            color.a = alpha;
+            previewImage.color = color;
+        }
+
+        private void StopPreviewFade()
+        {
+            if (_previewFadeCoroutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(_previewFadeCoroutine);
+            _previewFadeCoroutine = null;
+        }
+
+        private void OnDisable()
+        {
+            StopPreviewFade();
         }
     }
 }
