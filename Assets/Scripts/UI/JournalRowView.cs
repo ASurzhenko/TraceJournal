@@ -65,12 +65,20 @@ namespace TraceJournal.UI
 
             if (statusText != null)
             {
-                statusText.text = record.syncState == SyncState.Failed
+                string syncStatus = record.syncState == SyncState.Failed
                     ? "Failed · Retry"
                     : record.syncState.ToString();
+                statusText.text = $"{syncStatus} · ID {GetShortRecordId(record.id)}";
             }
 
             _retryButton.interactable = record.syncState == SyncState.Failed;
+        }
+
+        private static string GetShortRecordId(string recordId)
+        {
+            return Guid.TryParse(recordId, out Guid parsedId)
+                ? parsedId.ToString("N").Substring(0, 8)
+                : "unknown";
         }
 
         public void SetThumbnail(Texture2D thumbnailTexture)
