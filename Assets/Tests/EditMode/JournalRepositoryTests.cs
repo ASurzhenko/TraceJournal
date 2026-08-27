@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
@@ -83,6 +84,65 @@ namespace TraceJournal.Tests.EditMode
             Assert.IsFalse(
                 File.Exists(candidateImagePath),
                 "The rejected append's image should be cleaned up.");
+        }
+
+        [Test]
+        public void UpdateRemoteState_PersistsAcrossReload()
+        {
+            var repo = new JournalRepository(_tempRoot);
+            string imagePath = CreateOwnedImage(repo, "remote_state.jpg");
+            JournalRecord record = JournalRecord.CreateNew("text", "remote_state.jpg", 10, 10);
+            Assert.IsTrue(repo.TryAppend(record, imagePath, out string appendError), appendError);
+
+            Assert.IsTrue(
+                repo.TryUpdateRemoteState(
+                    record.id,
+                    SyncState.Synced,
+                    record.id,
+                    string.Empty,
+                    out string updateError),
+                updateError);
+
+            List<JournalRecord> records = new JournalRepository(_tempRoot).LoadAll();
+            Assert.AreEqual(1, records.Count);
+            Assert.AreEqual(SyncState.Synced, records[0].syncState);
+            Assert.AreEqual(record.id, records[0].remoteId);
+            Assert.AreEqual(string.Empty, records[0].syncError);
+        }
+
+        [Test]
+        public void FailedRemoteState_PersistsErrorAndExplicitRetryReturnsToPending()
+        {
+            var repo = new JournalRepository(_tempRoot);
+            string imagePath = CreateOwnedImage(repo, "failed_state.jpg");
+            JournalRecord record = JournalRecord.CreateNew("text", "failed_state.jpg", 10, 10);
+            Assert.IsTrue(repo.TryAppend(record, imagePath, out string appendError), appendError);
+
+            Assert.IsTrue(
+                repo.TryUpdateRemoteState(
+                    record.id,
+                    SyncState.Failed,
+                    string.Empty,
+                    "offline",
+                    out string failureError),
+                failureError);
+
+            Assert.IsTrue(repo.TryGet(record.id, out JournalRecord failed, out string loadError), loadError);
+            Assert.AreEqual(SyncState.Failed, failed.syncState);
+            Assert.AreEqual("offline", failed.syncError);
+
+            Assert.IsTrue(
+                repo.TryUpdateRemoteState(
+                    record.id,
+                    SyncState.Pending,
+                    failed.remoteId,
+                    string.Empty,
+                    out string pendingError),
+                pendingError);
+
+            Assert.IsTrue(repo.TryGet(record.id, out JournalRecord pending, out loadError), loadError);
+            Assert.AreEqual(SyncState.Pending, pending.syncState);
+            Assert.AreEqual(string.Empty, pending.syncError);
         }
 
         private static string CreateOwnedImage(JournalRepository repo, string fileName)

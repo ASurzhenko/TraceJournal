@@ -45,8 +45,15 @@ namespace TraceJournal.Models
         public string promptId;
         public string promptText;
         public string remoteId;
+        public string syncError;
 
-        public static JournalRecord CreateNew(string text, string imageRelativePath, int width, int height)
+        public static JournalRecord CreateNew(
+            string text,
+            string imageRelativePath,
+            int width,
+            int height,
+            string promptId = "",
+            string promptText = "")
         {
             return new JournalRecord
             {
@@ -58,9 +65,10 @@ namespace TraceJournal.Models
                 imageWidth = width,
                 imageHeight = height,
                 syncState = SyncState.Pending,
-                promptId = string.Empty,
-                promptText = string.Empty,
-                remoteId = string.Empty
+                promptId = promptId ?? string.Empty,
+                promptText = promptText ?? string.Empty,
+                remoteId = string.Empty,
+                syncError = string.Empty
             };
         }
 

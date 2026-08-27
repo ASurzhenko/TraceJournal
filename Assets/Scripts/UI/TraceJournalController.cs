@@ -1,4 +1,9 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using TraceJournal.Data;
 using TraceJournal.Image;
 using TraceJournal.Models;
@@ -8,10 +13,6 @@ using UnityEngine.UI;
 
 namespace TraceJournal.UI
 {
-    /// <summary>
-    /// Single composition/controller MonoBehaviour for F1. No DI container by
-    /// design — everything is wired directly in Awake.
-    /// </summary>
     public class TraceJournalController : MonoBehaviour
     {
         private static readonly int PreviewMaxLongEdge = 800;
@@ -19,16 +20,21 @@ namespace TraceJournal.UI
         [SerializeField] private ComposerView composerView;
         [SerializeField] private JournalListView listView;
         [SerializeField] private Button newEntryButton;
+        [SerializeField] private string supabaseUrl;
+        [SerializeField] private string supabasePublishableKey;
+
+        private readonly HashSet<string> _recordsInFlight = new HashSet<string>();
 
         private JournalRepository _repository;
         private IImageAcquisition _imageAcquisition;
+        private SupabaseClient _supabaseClient;
+        private CancellationTokenSource _lifetimeCancellation;
+        private RemotePrompt _activePrompt;
 
-        // Guards against a cancelled/failed/superseded pick result being applied
-        // after a newer pick has started.
         private int _pickGeneration;
+        private int _promptGeneration;
+        private bool _isDestroying;
 
-        // State for the image currently attached to the open composer, not yet
-        // committed to a saved record.
         private string _pendingImageRelativeFileName;
         private string _pendingImageAbsolutePath;
         private int _pendingImageWidth;
@@ -38,6 +44,13 @@ namespace TraceJournal.UI
         private void Awake()
         {
             _repository = new JournalRepository();
+            _lifetimeCancellation = new CancellationTokenSource();
+            _activePrompt = RemotePrompt.Fallback();
+            _supabaseClient = new SupabaseClient(
+                supabaseUrl,
+                supabasePublishableKey,
+                new SupabaseUnityTransport(),
+                new SupabaseSessionFileStore(Application.persistentDataPath));
 
 #if UNITY_EDITOR
             _imageAcquisition = new ImageAcquisitionEditor();
@@ -48,33 +61,43 @@ namespace TraceJournal.UI
             composerView.ChooseImageButton.onClick.AddListener(OnChooseImageClicked);
             composerView.SaveButton.onClick.AddListener(OnSaveClicked);
             composerView.CancelButton.onClick.AddListener(OnCancelClicked);
+            composerView.CloseButton.onClick.AddListener(OnCancelClicked);
             newEntryButton.onClick.AddListener(OnNewEntryClicked);
 
+            ApplyPrompt(_activePrompt);
             composerView.Hide();
         }
 
-        private void Start()
+        private async void Start()
         {
             RefreshList();
+            await RefreshPromptAsync();
+            await DeliverPendingAtStartupAsync();
         }
 
         private void OnDestroy()
         {
+            _isDestroying = true;
             _pickGeneration++;
+            _promptGeneration++;
+            _lifetimeCancellation.Cancel();
 
             composerView.ChooseImageButton.onClick.RemoveListener(OnChooseImageClicked);
             composerView.SaveButton.onClick.RemoveListener(OnSaveClicked);
             composerView.CancelButton.onClick.RemoveListener(OnCancelClicked);
+            composerView.CloseButton.onClick.RemoveListener(OnCancelClicked);
             newEntryButton.onClick.RemoveListener(OnNewEntryClicked);
 
             DiscardPendingImage(deleteOwnedFile: true, resetComposer: false);
+            _lifetimeCancellation.Dispose();
         }
 
-        private void OnNewEntryClicked()
+        private async void OnNewEntryClicked()
         {
             _pickGeneration++;
             ClearPendingImage();
             composerView.Show();
+            await RefreshPromptAsync();
         }
 
         private void OnChooseImageClicked()
@@ -87,10 +110,10 @@ namespace TraceJournal.UI
 
             _pickGeneration++;
             int thisGeneration = _pickGeneration;
+            composerView.BeginPreviewLoading();
 
             _imageAcquisition.PickImage(result =>
             {
-                // A newer pick started, or this composer session ended — ignore.
                 if (this == null || thisGeneration != _pickGeneration)
                 {
                     return;
@@ -98,17 +121,30 @@ namespace TraceJournal.UI
 
                 if (result.Cancelled)
                 {
+                    composerView.EndPreviewLoading();
                     return;
                 }
 
                 if (!result.Success)
                 {
+                    composerView.EndPreviewLoading();
                     composerView.SetError(result.Error ?? "Could not read the selected image.");
                     return;
                 }
 
-                HandlePickedImage(result.SourcePath);
+                StartCoroutine(HandlePickedImageNextFrame(result.SourcePath, thisGeneration));
             });
+        }
+
+        private IEnumerator HandlePickedImageNextFrame(string sourcePath, int pickGeneration)
+        {
+            yield return null;
+            if (this == null || pickGeneration != _pickGeneration)
+            {
+                yield break;
+            }
+
+            HandlePickedImage(sourcePath);
         }
 
         private void HandlePickedImage(string sourcePath)
@@ -124,6 +160,7 @@ namespace TraceJournal.UI
 
             if (!ok)
             {
+                composerView.EndPreviewLoading();
                 composerView.SetError(error);
                 return;
             }
@@ -137,9 +174,10 @@ namespace TraceJournal.UI
                     markTextureNonReadable: true,
                     generateMipmaps: false);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 TryDeleteFile(absoluteOutputPath);
+                composerView.EndPreviewLoading();
                 Debug.LogWarning(
                     $"{nameof(TraceJournalController)}.{nameof(HandlePickedImage)} [Preview] error={ex.Message}");
                 composerView.SetError("Could not preview the selected image.");
@@ -149,6 +187,7 @@ namespace TraceJournal.UI
             if (newPreviewTexture == null)
             {
                 TryDeleteFile(absoluteOutputPath);
+                composerView.EndPreviewLoading();
                 composerView.SetError("Could not preview the selected image.");
                 return;
             }
@@ -172,7 +211,7 @@ namespace TraceJournal.UI
             }
         }
 
-        private void OnSaveClicked()
+        private async void OnSaveClicked()
         {
             string text = composerView.CurrentText;
             bool hasOwnedImage = HasPendingOwnedImage();
@@ -190,7 +229,12 @@ namespace TraceJournal.UI
             }
 
             JournalRecord record = JournalRecord.CreateNew(
-                text, _pendingImageRelativeFileName, _pendingImageWidth, _pendingImageHeight);
+                text,
+                _pendingImageRelativeFileName,
+                _pendingImageWidth,
+                _pendingImageHeight,
+                _activePrompt.Id,
+                _activePrompt.Text);
 
             bool saved = _repository.TryAppend(record, _pendingImageAbsolutePath, out string saveError);
             if (!saved)
@@ -202,23 +246,181 @@ namespace TraceJournal.UI
             }
 
             _pickGeneration++;
-
-            // Ownership of the image file transfers to the saved record; don't
-            // delete it on subsequent composer resets.
             _pendingImageRelativeFileName = null;
             _pendingImageAbsolutePath = null;
 
             ClearPendingImage();
             composerView.Hide();
             RefreshList();
+            await TryDeliverRecordAsync(record.id, isExplicitRetry: false);
         }
 
         private void OnCancelClicked()
         {
-            // Invalidate any in-flight pick so a late callback can't reopen state.
             _pickGeneration++;
             ClearPendingImage();
             composerView.Hide();
+        }
+
+        private async Task RefreshPromptAsync()
+        {
+            _promptGeneration++;
+            int thisGeneration = _promptGeneration;
+
+            try
+            {
+                RemotePrompt prompt = await _supabaseClient.FetchActivePromptAsync(
+                    _lifetimeCancellation.Token);
+                if (this == null ||
+                    _isDestroying ||
+                    thisGeneration != _promptGeneration)
+                {
+                    return;
+                }
+
+                ApplyPrompt(prompt);
+                if (prompt.IsFallback && !string.IsNullOrEmpty(prompt.Error))
+                {
+                    Debug.LogWarning(
+                        $"{nameof(TraceJournalController)}.{nameof(RefreshPromptAsync)} [Fallback] {prompt.Error}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (this != null && thisGeneration == _promptGeneration)
+                {
+                    ApplyPrompt(RemotePrompt.Fallback("The prompt request failed unexpectedly."));
+                    Debug.LogWarning(
+                        $"{nameof(TraceJournalController)}.{nameof(RefreshPromptAsync)} [Request] error={ex.Message}");
+                }
+            }
+        }
+
+        private void ApplyPrompt(RemotePrompt prompt)
+        {
+            _activePrompt = prompt;
+            composerView.SetPrompt(prompt.Text);
+        }
+
+        private async Task DeliverPendingAtStartupAsync()
+        {
+            List<JournalRecord> records = _repository.LoadAll();
+            foreach (JournalRecord record in records)
+            {
+                if (_isDestroying)
+                {
+                    return;
+                }
+
+                if (record.syncState == SyncState.Pending)
+                {
+                    await TryDeliverRecordAsync(record.id, isExplicitRetry: false);
+                }
+            }
+        }
+
+        private async void OnRetryRequested(string recordId)
+        {
+            await TryDeliverRecordAsync(recordId, isExplicitRetry: true);
+        }
+
+        private async Task TryDeliverRecordAsync(string recordId, bool isExplicitRetry)
+        {
+            if (_recordsInFlight.Contains(recordId))
+            {
+                Debug.LogWarning(
+                    $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [Duplicate] id={recordId}");
+                return;
+            }
+
+            if (!_repository.TryGet(recordId, out JournalRecord record, out string loadError))
+            {
+                Debug.LogError(
+                    $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [Load] id={recordId}, error={loadError}");
+                return;
+            }
+
+            if (record.syncState == SyncState.Synced)
+            {
+                Debug.LogWarning(
+                    $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [AlreadySynced] id={recordId}");
+                return;
+            }
+
+            if (isExplicitRetry &&
+                !_repository.TryUpdateRemoteState(
+                    recordId,
+                    SyncState.Pending,
+                    record.remoteId,
+                    string.Empty,
+                    out string pendingError))
+            {
+                Debug.LogError(
+                    $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [Pending] id={recordId}, error={pendingError}");
+                return;
+            }
+
+            _recordsInFlight.Add(recordId);
+            RefreshList();
+
+            try
+            {
+                RemoteOperationResult result = await _supabaseClient.DeliverAsync(
+                    record,
+                    _repository.ImagesDirectory,
+                    _lifetimeCancellation.Token);
+                if (this == null || _isDestroying)
+                {
+                    return;
+                }
+
+                SyncState state = result.Success ? SyncState.Synced : SyncState.Failed;
+                string remoteId = result.Success ? result.RemoteRecordId : record.remoteId;
+                string syncError = result.Success ? string.Empty : result.Error;
+                if (!_repository.TryUpdateRemoteState(
+                        recordId,
+                        state,
+                        remoteId,
+                        syncError,
+                        out string updateError))
+                {
+                    Debug.LogError(
+                        $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [Persist] id={recordId}, error={updateError}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (this != null && !_isDestroying)
+                {
+                    if (!_repository.TryUpdateRemoteState(
+                            recordId,
+                            SyncState.Failed,
+                            record.remoteId,
+                            "The remote request failed unexpectedly.",
+                            out string persistError))
+                    {
+                        Debug.LogError(
+                            $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [PersistFailure] id={recordId}, error={persistError}");
+                    }
+
+                    Debug.LogWarning(
+                        $"{nameof(TraceJournalController)}.{nameof(TryDeliverRecordAsync)} [Request] id={recordId}, error={ex.Message}");
+                }
+            }
+            finally
+            {
+                _recordsInFlight.Remove(recordId);
+                if (this != null && !_isDestroying)
+                {
+                    RefreshList();
+                }
+            }
         }
 
         private void ClearPendingImage()
@@ -281,7 +483,7 @@ namespace TraceJournal.UI
                     File.Delete(absolutePath);
                 }
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 Debug.LogWarning(
                     $"{nameof(TraceJournalController)}.{nameof(TryDeleteFile)} [Cleanup] path={absolutePath}, error={ex.Message}");
@@ -290,8 +492,8 @@ namespace TraceJournal.UI
 
         private void RefreshList()
         {
-            var records = _repository.LoadAll();
-            listView.Render(records, _repository.ImagesDirectory);
+            List<JournalRecord> records = _repository.LoadAll();
+            listView.Render(records, _repository.ImagesDirectory, OnRetryRequested);
         }
     }
 }
