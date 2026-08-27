@@ -43,5 +43,8 @@ features, elaborate animation and production-compliance claims are excluded.
 
 ## Estimate integrity
 
-This initial estimate is not rewritten after implementation starts. Actual focused
-time and material variance may be appended below during final submission preparation.
+The original estimate was committed before product implementation in `3e4af58`; the
+first product-code commit is `a402eb3`. Its hours, working range, assumptions and scope
+cuts were not revised after coding began. A later release-documentation pass changed
+Markdown formatting only. Actual focused time and material variance may be appended
+without rewriting the original estimate.

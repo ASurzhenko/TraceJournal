@@ -146,8 +146,10 @@ A compact review flow is:
 Image acquisition uses NativeGallery `1.9.4` under the MIT License. The original
 license is included at `Assets/Plugins/NativeGallery/LICENSE.txt`.
 
-[`DECISIONS.md`](DECISIONS.md) records consequential choices and trade-offs, and
-[`ESTIMATE.md`](ESTIMATE.md) preserves the initial pre-code estimate. Process,
-verification evidence and final demo steps remain in this README rather than separate
-architecture, devlog or test-report documents. Privileged credentials are never
-committed.
+[`DECISIONS.md`](DECISIONS.md) records consequential choices and trade-offs.
+[`ESTIMATE.md`](ESTIMATE.md) was committed before implementation (`3e4af58`; first
+product-code commit: `a402eb3`). Its hours, range, assumptions and scope were not
+revised after coding began; a later documentation pass changed formatting only.
+Process, verification evidence and final demo steps remain in this README rather than
+separate architecture, devlog or test-report documents. Privileged credentials are
+never committed.
